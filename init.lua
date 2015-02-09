@@ -56,7 +56,7 @@ uart.setup(0, 115200, 8, 0, 1, 0)
 tmr.delay(250*1000)
 
 -- Load config.lua
-print("\n\n-- esp8266-init -- Loading config.lua")
+print("\n\n-- esp8266-init\nLoading config.lua")
 configChunk, err = loadfile("config.lua")
 if configChunk == nil then
   print(err)

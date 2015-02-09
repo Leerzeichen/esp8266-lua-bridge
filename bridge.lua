@@ -1,14 +1,18 @@
 -- bridge.lua ESP8266-bridge
 -- bridges TCP connections with the UART on the ESP8266 and adds some features to 
 -- toggle GPIO pins so microcontrollers attached to the UART can be reset and put
--- into "programming mode"
+-- into "programming mode", assumes: GPIO-0 = RTS = ARM-ROM-boot, GPIO-2 = DTR = RESET
 -- (c) 2015 Thorsten von Eicken, see LICENSE file
 
 print("-- esp8266-bridge")
+--gpio.mode(3, gpio.PULLUP) -- GPIO-0=wakeup=RTS
+--gpio.mode(4, gpio.PULLUP) -- GPIO-2=reset=DTR
 
 -- receive a string from lua interpreter and send to appropriate connection
 function lua_out(conn)
   return function(str)
+    --if conn == nil then uart.write(0, "{!CONN}") end
+    --uart.write(0, "{"..str.."}")
     if conn ~= nil then conn:send(str) end
   end
 end
@@ -17,6 +21,20 @@ end
 function uart_input(conn)
   inputFun = function(str) if conn ~= nil then conn:send(str) end end
   uart.on("data", 0, inputFun, 0)
+end
+
+-- toggle reste while holding wakeup low
+function arm_reset()
+  gpio.write(3, gpio.LOW)
+  gpio.mode(3, gpio.OUTPUT)
+  gpio.write(4, gpio.LOW)
+  gpio.mode(4, gpio.OUTPUT)
+  tmr.sleep(250*1000)
+  gpio.write(4, gpio.HIGH)
+  gpio.mode(4, gpio.PULLUP)
+  gpio.write(3, gpio.HIGH)
+  gpio.mode(3, gpio.PULLUP)
+  tmr.sleep(500*1000)
 end
 
 
@@ -36,16 +54,16 @@ actions = {
   },
   ["^?\r\n"] = {
     "ARM",
-    function(conn, name) uart_input(conn) end,
+    function(conn, name) uart_input(conn) arm_reset() end,
     function(conn, data) uart.write(0, data) end,
     function(conn) end,
   },
-  ["^\0"] = {
-    "AVR",
-    function(conn, name) uart_input(conn) end,
-    function(conn, data) uart.write(0, data) end,
-    function(conn) end,
-  },
+--  ["^\0"] = {
+--    "AVR",
+--    function(conn, name) uart_input(conn) end,
+--    function(conn, data) uart.write(0, data) end,
+--    function(conn) end,
+--  },
   [""] = {
     "THRU",
     function(conn, name) uart_input(conn) end,
@@ -66,6 +84,7 @@ function findAction(conn, data)
       if m then break end
     end
   end
+  print(kind)
   if conn and sf then sf(conn, m) end
   return kind, rf, ef
 end
@@ -84,6 +103,4 @@ ser2net:listen(23, function(conn)
     end
     if conn ~= nil and recvFun then recvFun(conn, data) end
   end)
-
 end)
-
