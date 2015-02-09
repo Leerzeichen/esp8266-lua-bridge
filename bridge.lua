@@ -4,78 +4,86 @@
 -- into "programming mode"
 -- (c) 2015 Thorsten von Eicken, see LICENSE file
 
-print("=== esp8266-bridge ===")
+print("-- esp8266-bridge")
 
-activeConsole = nil
-activePass = nil
-connCnt = 1
+-- receive a string from lua interpreter and send to appropriate connection
+function lua_out(conn)
+  return function(str)
+    if conn ~= nil then conn:send(str) end
+  end
+end
 
-ser2net = net.createServer(net.TCP, 60)
-ser2net:listen(2000, function(conn)
-  local id, kind
-  id, connCnt = connCnt, connCnt+1
+-- receive data from the uart and send to appropriate connection
+function uart_input(conn)
+  inputFun = function(str) if conn ~= nil then conn:send(str) end end
+  uart.on("data", 0, inputFun, 0)
+end
 
-  print("New ser2net connection #" .. id)
 
-  conn:on("disconnection", function(conn)
-    if kind == 'UP' then
-      file.close()
-    elseif kind == 'CON' then
-      node.output(nil)
-      if activeConsole == conn then activeConsole = nil end
-    elseif kind == 'PASS' then
-      if activePass == conn then activePass = nil end
-    end
-  end)
+-- Actions have a start function, a receive-data function, and a close function
+actions = {
+  ["^-- *(%w+%.lua)"] = {
+    "FILE",
+    function(conn, name) print("Writing " .. name) file.open(name, "w") end,
+    function(conn, data) file.write(data) end,
+    function(conn) print("File close") file.close() end,
+  },
+  ["^--[\r\n]"] = {
+    "CONS",
+    function(conn, name) node.output(lua_out(conn), 0) end,
+    function(conn, data) node.input(data) end,
+    function(conn) node.output(nil) end,
+  },
+  ["^?\r\n"] = {
+    "ARM",
+    function(conn, name) uart_input(conn) end,
+    function(conn, data) uart.write(0, data) end,
+    function(conn) end,
+  },
+  ["^\0"] = {
+    "AVR",
+    function(conn, name) uart_input(conn) end,
+    function(conn, data) uart.write(0, data) end,
+    function(conn) end,
+  },
+  [""] = {
+    "THRU",
+    function(conn, name) uart_input(conn) end,
+    function(conn, data) uart.write(0, data) end,
+    function(conn) end,
+  },
+}
 
-  function lua_out(str)
-    if conn ~= nil then
-      conn:send(str)
+-- determine the action based on the string
+function findAction(conn, data)
+  local m
+  local kind, sf, rf, ef = actions[""] -- default
+  for patt, v in pairs(actions) do
+    kind, sf, rf, ef = unpack(v)
+    -- print ("Try "..patt.." with "..kind, sf, rf, ef)
+    if patt ~= "" then
+      m = string.match(data, patt)
+      if m then break end
     end
   end
+  if conn and sf then sf(conn, m) end
+  return kind, rf, ef
+end
+
+ser2net = net.createServer(net.TCP, 300)
+ser2net:listen(23, function(conn)
+  print("New connection")
+  local kind, recvFun, stopFun
+
+  conn:on("disconnection", function(conn) if stopFun then stopFun(conn) end end)
 
   conn:on("receive", function(conn, data) 
     -- if this is the beginning of the connection, determine the type of connection
     if kind == nil then
-      print("Got " .. string.sub(data, 1, 2))
-      if string.sub(data, 1, 2) == '--' then
-        -- file upload
-  kind = 'UP'
-  file.open("ser2net.lua", "w")
-      elseif string.sub(data, 1, 1) == "@" then
-  -- console
-  kind = 'CON'
-        node.output(lua_out, 0)
-  if activeConsole ~= nil then
-    activeConsole:close()
-        end
-        activeConsole = conn
-      else
-  -- pass-through to uart
-  kind = 'PASS'
-  if activePass ~= nil then
-    activePass:close()
-  end
-  activePass = conn
-      end
-      print("Connection #" .. id .. " is " .. kind)
+      kind, recvFun, stopFun = findAction(conn, data)
     end
-
-    if kind == "PASS" then
-      uart.write(0, data)
-    elseif kind == 'CON' then
-      node.input(data)
-    elseif kind == 'UP' then
-      file.write(data)
-    end
+    if conn ~= nil and recvFun then recvFun(conn, data) end
   end)
-
-  function uart_input(data)
-    if conn ~= nil then
-      conn:send(data)
-    end
-  end
-  uart.on("data", 0, uart_input, 0)
 
 end)
 
