@@ -5,102 +5,153 @@
 -- (c) 2015 Thorsten von Eicken, see LICENSE file
 
 print("-- esp8266-bridge")
---gpio.mode(3, gpio.PULLUP) -- GPIO-0=wakeup=RTS
---gpio.mode(4, gpio.PULLUP) -- GPIO-2=reset=DTR
 
--- receive a string from lua interpreter and send to appropriate connection
-function lua_out(conn)
-  return function(str)
-    --if conn == nil then uart.write(0, "{!CONN}") end
-    --uart.write(0, "{"..str.."}")
-    if conn ~= nil then conn:send(str) end
-  end
-end
+-- ensure gpio's are in pull-up state
+gpio.mode(4, gpio.PULLUP) -- GPIO-2=reset=DTR
+gpio.mode(3, gpio.PULLUP) -- GPIO-0=wakeup=RTS
 
--- receive data from the uart and send to appropriate connection
-function uart_input(conn)
-  inputFun = function(str) if conn ~= nil then conn:send(str) end end
-  uart.on("data", 0, inputFun, 0)
-end
-
--- toggle reste while holding wakeup low
+-- toggle reset while holding wakeup low
+-- the timing here isn't particularly scientific...
 function arm_reset()
   gpio.write(3, gpio.LOW)
   gpio.mode(3, gpio.OUTPUT)
+  tmr.delay(50*1000)
   gpio.write(4, gpio.LOW)
   gpio.mode(4, gpio.OUTPUT)
-  tmr.sleep(250*1000)
+  tmr.delay(250*1000)
   gpio.write(4, gpio.HIGH)
   gpio.mode(4, gpio.PULLUP)
+  tmr.delay(50*1000)
   gpio.write(3, gpio.HIGH)
   gpio.mode(3, gpio.PULLUP)
-  tmr.sleep(500*1000)
+  tmr.delay(500*1000)
 end
 
+-- connection modes
+CONS = 1        -- Lua console
+FILE = 2        -- upload file
+ARM  = 3        -- program ARM (LPC8xx)
+AVR  = 4        -- program AVR (Arduino optiboot)
+THRU = 5        -- pass-through to uart
 
--- Actions have a start function, a receive-data function, and a close function
-actions = {
-  ["^-- *(%w+%.lua)"] = {
-    "FILE",
-    function(conn, name) print("Writing " .. name) file.open(name, "w") end,
-    function(conn, data) file.write(data) end,
-    function(conn) print("File close") file.close() end,
-  },
-  ["^--[\r\n]"] = {
-    "CONS",
-    function(conn, name) node.output(lua_out(conn), 0) end,
-    function(conn, data) node.input(data) end,
-    function(conn) node.output(nil) end,
-  },
-  ["^?\r\n"] = {
-    "ARM",
-    function(conn, name) uart_input(conn) arm_reset() end,
-    function(conn, data) uart.write(0, data) end,
-    function(conn) end,
-  },
---  ["^\0"] = {
---    "AVR",
---    function(conn, name) uart_input(conn) end,
---    function(conn, data) uart.write(0, data) end,
---    function(conn) end,
---  },
-  [""] = {
-    "THRU",
-    function(conn, name) uart_input(conn) end,
-    function(conn, data) uart.write(0, data) end,
-    function(conn) end,
-  },
+modes = {
+  "^--[\r\n]",          -- CONS
+  "^-- *(%w+%.lua)",    -- FILE
+  "^?\r\n",             -- ARM
+  "^\0",                -- AVR
 }
 
--- determine the action based on the string
-function findAction(conn, data)
-  local m
-  local kind, sf, rf, ef = actions[""] -- default
-  for patt, v in pairs(actions) do
-    kind, sf, rf, ef = unpack(v)
-    -- print ("Try "..patt.." with "..kind, sf, rf, ef)
-    if patt ~= "" then
-      m = string.match(data, patt)
-      if m then break end
-    end
+-- determine the connection mode from the first few bytes
+-- returns the mode and the string match
+function find_mode(data)
+  for i = 1, #modes do
+    local m = string.match(data, modes[i])
+    if m then return i, m end
   end
-  print(kind)
-  if conn and sf then sf(conn, m) end
-  return kind, rf, ef
+  return THRU, ""
 end
+
+consConn = nil -- current connection that lua console output goes to
+uartConn = nil -- current connection that uart input goes to
+connCnt = 0
+
+consBuf = ""
+-- buffer a little bit of console output for debugging, can't send it to UART
+-- 'cause that interferes with programming
+function consoleSink(data)
+  if #data > 256 then
+    consBuf = string.sub(data, -300) -- keep last 300 bytes
+  elseif #consBuf + #data > 300 then
+    consBuf = string.sub(consBuf, -(300-#data)) .. data
+  else
+    consBuf = consBuf .. data
+  end
+end
+
+node.output(consoleSink, 0)
 
 ser2net = net.createServer(net.TCP, 300)
 ser2net:listen(23, function(conn)
-  print("New connection")
-  local kind, recvFun, stopFun
+  connCnt = connCnt + 1
+  local id = connCnt
+  print("#"..connCnt.." connect")
+  local mode
 
-  conn:on("disconnection", function(conn) if stopFun then stopFun(conn) end end)
+  local buf = "" -- send buffer
+  local sendLock -- true when we can't send
+
+  -- send data on the connection
+  function sender(data)
+    if conn == nil then return end
+    if sendLock then
+      -- send is pending, can't send more, add to buffer, hope it doesn't fill memory
+      buf = buf .. data
+    else
+      -- we can send, doing and lock, but avoid race conditions with conn:on("sent", ...)
+      sendLock = true
+      data = buf .. data
+      buf = ""
+      conn:send(buf .. data)
+    end
+  end
+
+  -- done sending, send anything that has accumulated, else clear send lock
+  conn:on("sent", function(conn)
+    if #buf > 0 then
+      conn:send(buf)
+      buf = ""
+    else
+      sendLock = false
+    end
+  end)
+
+  -- oops, we're dead
+  conn:on("disconnection", function(conn)
+    if mode == CONS and consConn == conn then
+      consConn = nil
+      node.output(consoleSink, 0) -- lua console back to sink
+    elseif mode == FILE then
+      print("File close")
+      file.close()
+    end
+    print("#"..id.." closed")
+  end)
 
   conn:on("receive", function(conn, data) 
-    -- if this is the beginning of the connection, determine the type of connection
-    if kind == nil then
-      kind, recvFun, stopFun = findAction(conn, data)
+    if mode == nil then
+      -- beginning of the connection, determine the type of connection
+      local match
+      mode, match = find_mode(data)
+      if mode == CONS then
+        if consConn then consConn:close() end
+        consConn = conn
+        if #consBuf > 0 then
+          sender(consBuf)
+          consBuf = ""
+        end
+        node.output(sender, 0)
+      elseif mode == FILE then
+        print("Writing " .. match)
+        file.open(match, "w")
+      else
+        if uartConn then uartConn:close() end
+        uartConn = conn
+        uart.on("data", 0, sender, 0)
+        if mode == ARM or mode == AVR then
+          arm_reset()
+        end
+      end
+      print("#"..id.."="..mode)
     end
-    if conn ~= nil and recvFun then recvFun(conn, data) end
+
+    if mode == CONS then
+      node.input(data)
+    elseif mode == FILE then
+      file.write(data)
+    else
+      uart.write(0, data)
+    end
+
   end)
+
 end)
