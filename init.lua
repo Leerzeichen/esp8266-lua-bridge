@@ -72,13 +72,13 @@ if configOk and STA_SSID ~= nil then
   wifi.sta.config(STA_SSID, STA_PWD)
   function wifiStatus() return wifi.sta.status(), wifi.sta.getip() end
 else
-  print("WIFI AP")
+  --print("WIFI AP")
   --wifi.setmode(wifi.STATIONAP)
   --wifi.ap.config({ssid=AP_SSID, pwd=AP_PWD})
   --function wifiStatus() return 5, wifi.ap.getip() end
 end
 
 -- Launch the periodic connection check, which will kick off the app
-tmr.alarm(0, 1000, 0, checkWIFI)
+if wifiStatus then tmr.alarm(0, 1000, 0, checkWIFI) end
 
 -- Drop through here to let NodeMcu run

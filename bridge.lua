@@ -15,16 +15,16 @@ gpio.mode(3, gpio.PULLUP) -- GPIO-0=wakeup=RTS
 function arm_reset()
   gpio.write(3, gpio.LOW)
   gpio.mode(3, gpio.OUTPUT)
-  tmr.delay(50*1000)
+  --tmr.delay(50*1000)
   gpio.write(4, gpio.LOW)
   gpio.mode(4, gpio.OUTPUT)
   tmr.delay(250*1000)
   gpio.write(4, gpio.HIGH)
   gpio.mode(4, gpio.PULLUP)
-  tmr.delay(50*1000)
+  --tmr.delay(50*1000)
   gpio.write(3, gpio.HIGH)
   gpio.mode(3, gpio.PULLUP)
-  tmr.delay(500*1000)
+  tmr.delay(1*1000)
 end
 
 -- connection modes
@@ -38,7 +38,7 @@ modes = {
   "^--[\r\n]",          -- CONS
   "^-- *(%w+%.lua)",    -- FILE
   "^?\r\n",             -- ARM
-  "^\0",                -- AVR
+  "^0",                 -- AVR
 }
 
 -- determine the connection mode from the first few bytes
@@ -137,6 +137,7 @@ ser2net:listen(23, function(conn)
         if uartConn then uartConn:close() end
         uartConn = conn
         uart.on("data", 0, sender, 0)
+        --uart.on("data", "\n", sender, 0)
         if mode == ARM or mode == AVR then
           arm_reset()
         end
@@ -149,6 +150,7 @@ ser2net:listen(23, function(conn)
     elseif mode == FILE then
       file.write(data)
     else
+      -- uart.write(0, "[".. #data ..",".. data:byte(-2,-1) ..",".. data:byte(-1) .."]")
       uart.write(0, data)
     end
 
