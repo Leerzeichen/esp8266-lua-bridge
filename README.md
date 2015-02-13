@@ -53,12 +53,15 @@ TCP Version
 The first version of the esp8266-bridge uses simple TCP connections and dispatches to multiple
 functions based on the first few characters sent over the TCP connection. Clients connect to
 port 23 and the first few characters are interpreted as follows:
-- "--!" (lua comment) causes the connection to be connected to the lua interpreter allowing
-  any lua commands to be entered
-- "--" (lua comment string) causes everything received to be written into bridge.lua on the ESP8266,
-  this is used to update the esp8266-bridge app over wifi
-- "Synchronize" causes GPIO_0 and GPIO_2 to be pulsed low to reset an ARM then passes all characters
-  transparently between the connetion and the uart (assumes the following connections: )
-- ?? causes GPIO_0 to be pulsed low to reset an AVR (Arduino) then passes all characters
-  transparently between the connection and the uart (assumes the following connections: )
+- "--\n" (lua comment string followed by newline) causes the connection to be connected to the lua
+  interpreter allowing any lua commands to be entered
+- "-- filename.lua" causes everything received to be written into the file with the given name
+  on the ESP8266, this is used to update the esp8266-bridge app over wifi by putting a comment with the
+  filename at the start of each file and then "net-catting" the file to the ESP (use something like
+  "nc 192.168.1.1 23 < bridge.lua" on linux)
+- "\0" (NULL character) causes GPIO_0 and GPIO_2 to be pulsed low to reset an ARM then passes all characters
+  transparently between the connetion and the uart (assumes GPIO_2 is connected to the ARM's reset input and
+  GPIO_0 to its ROM boot selector pin)
+- "0" causes GPIO_2 to be pulsed low to reset an AVR (Arduino) then passes all characters
+  transparently between the connection and the uart (assumes GPIO_2 is connectoed to the AVR's reset input)
 - anything else causes a transparent pass-through between the connection and the uart

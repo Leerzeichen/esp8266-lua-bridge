@@ -72,10 +72,10 @@ if configOk and STA_SSID ~= nil then
   wifi.sta.config(STA_SSID, STA_PWD)
   function wifiStatus() return wifi.sta.status(), wifi.sta.getip() end
 else
-  --print("WIFI AP")
-  --wifi.setmode(wifi.STATIONAP)
-  --wifi.ap.config({ssid=AP_SSID, pwd=AP_PWD})
-  --function wifiStatus() return 5, wifi.ap.getip() end
+  print("WIFI AP")
+  wifi.setmode(wifi.STATIONAP)
+  wifi.ap.config({ssid=AP_SSID, pwd=AP_PWD})
+  function wifiStatus() return 5, wifi.ap.getip() end
 end
 
 -- Launch the periodic connection check, which will kick off the app

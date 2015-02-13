@@ -12,19 +12,18 @@ gpio.mode(3, gpio.PULLUP) -- GPIO-0=wakeup=RTS
 
 -- toggle reset while holding wakeup low
 -- the timing here isn't particularly scientific...
-function arm_reset()
+function start_reset()
   gpio.write(3, gpio.LOW)
   gpio.mode(3, gpio.OUTPUT)
-  --tmr.delay(50*1000)
   gpio.write(4, gpio.LOW)
   gpio.mode(4, gpio.OUTPUT)
-  tmr.delay(250*1000)
+end
+
+function stop_reset()
   gpio.write(4, gpio.HIGH)
   gpio.mode(4, gpio.PULLUP)
-  --tmr.delay(50*1000)
   gpio.write(3, gpio.HIGH)
   gpio.mode(3, gpio.PULLUP)
-  tmr.delay(1*1000)
 end
 
 -- connection modes
@@ -69,12 +68,13 @@ function consoleSink(data)
 end
 
 node.output(consoleSink, 0)
+uart.on("data", 0, function(data) end, 0)
 
 ser2net = net.createServer(net.TCP, 300)
 ser2net:listen(23, function(conn)
   connCnt = connCnt + 1
   local id = connCnt
-  print("#"..connCnt.." connect")
+  print("#"..connCnt.." connect h:"..node.heap())
   local mode
 
   local buf = "" -- send buffer
@@ -85,13 +85,17 @@ ser2net:listen(23, function(conn)
     if conn == nil then return end
     if sendLock then
       -- send is pending, can't send more, add to buffer, hope it doesn't fill memory
-      buf = buf .. data
+      if #buf < 1000 then buf = buf .. data end
     else
       -- we can send, doing and lock, but avoid race conditions with conn:on("sent", ...)
       sendLock = true
       data = buf .. data
       buf = ""
-      conn:send(buf .. data)
+      --if consConn and consConn != conn then
+        --consConn:send("[".. data:format("%q") .."]\n")
+      --else
+        conn:send(data)
+      --end
     end
   end
 
@@ -137,9 +141,12 @@ ser2net:listen(23, function(conn)
         if uartConn then uartConn:close() end
         uartConn = conn
         uart.on("data", 0, sender, 0)
-        --uart.on("data", "\n", sender, 0)
+        --uart.on("data", "\n", sender, 0) -- ok for ARM, not ok for AVR
         if mode == ARM or mode == AVR then
-          arm_reset()
+  	  start_reset()
+	  tmr.delay(100*1000)
+          stop_reset();
+	  tmr.delay(100)
         end
       end
       print("#"..id.."="..mode)
