@@ -89,13 +89,8 @@ ser2net:listen(23, function(conn)
     else
       -- we can send, doing and lock, but avoid race conditions with conn:on("sent", ...)
       sendLock = true
-      data = buf .. data
+      conn:send(buf .. data)
       buf = ""
-      --if consConn and consConn != conn then
-        --consConn:send("[".. data:format("%q") .."]\n")
-      --else
-        conn:send(data)
-      --end
     end
   end
 
@@ -142,11 +137,11 @@ ser2net:listen(23, function(conn)
         uartConn = conn
         uart.on("data", 0, sender, 0)
         --uart.on("data", "\n", sender, 0) -- ok for ARM, not ok for AVR
-        if mode == ARM or mode == AVR then
+        if mode == ARM  or mode == AVR then
   	  start_reset()
-	  tmr.delay(100*1000)
-          stop_reset();
-	  tmr.delay(100)
+	  tmr.delay(1*1000)
+          stop_reset()
+	  return
         end
       end
       print("#"..id.."="..mode)
